@@ -20,7 +20,10 @@
   <main>
     <section class="search-panel">
       <form id="search-form" autocomplete="off">
-        <input id="search-input" type="text" placeholder="Search a country, e.g. Japan" aria-label="Country name" />
+        <div class="search-wrap">
+          <input id="search-input" type="text" placeholder="Search a country, e.g. Japan" aria-label="Country name" />
+          <ul id="suggestions" class="suggestions" hidden></ul>
+        </div>
         <button type="submit">Explore</button>
       </form>
       <div id="chips" class="chips" aria-label="Suggested countries"></div>
@@ -31,7 +34,6 @@
       <article id="country-card" class="card">
         <div class="placeholder">Search for a country to see its details.</div>
       </article>
-
       <article id="weather-card" class="card">
         <div class="placeholder">Current weather for the capital appears here.</div>
       </article>
@@ -44,8 +46,9 @@
   </main>
 
   <footer>
-    Data from <a href="https://restcountries.com" target="_blank" rel="noopener">REST Countries</a>
-    and <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>. No API keys required.
+    Data from <a href="https://restcountries.com" target="_blank" rel="noopener">REST Countries</a>,
+    <a href="https://github.com/mledoze/countries" target="_blank" rel="noopener">mledoze/countries</a>,
+    and <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>.
   </footer>
 
   <script src="app.js"></script>
