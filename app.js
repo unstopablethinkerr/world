@@ -22,7 +22,7 @@ const FALLBACK_COUNTRY = "Japan";
 
 const TOKYO = { lat: 35.6762, lng: 139.6503 };
 const SUGGESTIONS = ["Japan", "Brazil", "India", "Kenya", "Norway", "Australia"];
-const MAX_SUGGESTIONS = 6;
+const MAX_SUGGESTIONS = 8;
 const MAX_RECENT = 6;
 
 // WMO weather codes used by Open-Meteo
@@ -323,11 +323,38 @@ function renderSuggestions(list) {
   suggestionsEl.hidden = false;
 }
 
+// Lowercase and remove accents, so "cote" matches "Côte d'Ivoire"
+function normalize(text) {
+  return (text ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+// Tier 1: names that start with the query. Tier 2: names that contain it anywhere.
+// Each tier stays alphabetical, because allCountries is already sorted.
+function findSuggestions(query) {
+  const needle = normalize(query);
+  if (needle.length < 2) return [];
+
+  const startsWith = [];
+  const contains = [];
+
+  for (const country of allCountries) {
+    const name = normalize(country.names.common);
+    if (name.startsWith(needle)) {
+      startsWith.push(country);
+    } else if (name.includes(needle)) {
+      contains.push(country);
+    }
+  }
+
+  return [...startsWith, ...contains].slice(0, MAX_SUGGESTIONS);
+}
+
 function loadSuggestions(q) {
-  const needle = q.toLowerCase();
-  currentMatches = allCountries
-    .filter((c) => c.names.common.toLowerCase().startsWith(needle))
-    .slice(0, MAX_SUGGESTIONS);
+  currentMatches = findSuggestions(q);
   renderSuggestions(currentMatches);
 }
 
