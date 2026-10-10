@@ -182,6 +182,8 @@ form.addEventListener("submit", (e) => {
   search(input.value);
 });
 
-renderChips();
-renderRecent();
-search("Japan");
+document.addEventListener("DOMContentLoaded", () => {
+  renderChips();
+  renderRecent();
+  search("Japan");
+});
