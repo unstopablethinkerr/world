@@ -1,3 +1,10 @@
+window.addEventListener("error", (event) => {
+  const el = document.getElementById("status");
+  if (el) {
+    el.textContent = "Script error: " + event.message;
+    el.classList.add("error");
+  }
+});
 const form = document.getElementById("search-form");
 const input = document.getElementById("search-input");
 const statusEl = document.getElementById("status");
