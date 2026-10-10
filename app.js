@@ -1,10 +1,6 @@
-window.addEventListener("error", (event) => {
-  const el = document.getElementById("status");
-  if (el) {
-    el.textContent = "Script error: " + event.message;
-    el.classList.add("error");
-  }
-});
+const PROXY_URL = "https://black-silence-e788.balasanthoshb.workers.dev";
+const OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast";
+
 const form = document.getElementById("search-form");
 const input = document.getElementById("search-input");
 const statusEl = document.getElementById("status");
@@ -28,6 +24,12 @@ const WEATHER_CODES = {
   95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Severe thunderstorm"
 };
 
+// Show any unexpected script error on the page
+window.addEventListener("error", (event) => {
+  statusEl.textContent = "Script error: " + event.message;
+  statusEl.classList.add("error");
+});
+
 // Escape text before inserting it into HTML
 function esc(value) {
   const div = document.createElement("div");
@@ -40,14 +42,17 @@ function setStatus(message, isError = false) {
   statusEl.classList.toggle("error", isError);
 }
 
+// Calls the Cloudflare Worker, which adds the API key on the server
 async function fetchCountry(name) {
-  const res = await fetch(`https://restcountries.com/v3.1/name/${encodeURIComponent(name)}`);
-  if (res.status === 404) throw new Error(`No country found for "${name}". Try another spelling.`);
-  if (!res.ok) throw new Error("The country service is unavailable right now.");
+  const res = await fetch(`${PROXY_URL}?q=${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error("Country service unavailable.");
 
-  const results = await res.json();
+  const json = await res.json();
+  const results = json.data?.objects ?? [];
+  if (results.length === 0) throw new Error(`No country found for "${name}".`);
+
   return (
-    results.find((c) => c.name.common.toLowerCase() === name.toLowerCase()) ||
+    results.find((c) => c.names.common.toLowerCase() === name.toLowerCase()) ||
     results[0]
   );
 }
@@ -59,26 +64,27 @@ async function fetchWeather(lat, lon) {
     current: "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
     timezone: "auto"
   });
-  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`);
+  const res = await fetch(`${OPEN_METEO_URL}?${params}`);
   if (!res.ok) throw new Error("Weather service unavailable.");
   const data = await res.json();
   return data.current;
 }
 
 function renderCountry(c) {
-  const capital = c.capital?.[0] ?? "—";
+  const capitalObj = c.capitals?.find((x) => x.primary) ?? c.capitals?.[0];
+  const capital = capitalObj?.name ?? "—";
   const population = c.population?.toLocaleString() ?? "—";
-  const currencies = Object.values(c.currencies ?? {})
+  const currencies = (c.currencies ?? [])
     .map((cur) => (cur.symbol ? `${cur.name} (${cur.symbol})` : cur.name))
     .join(", ") || "—";
-  const languages = Object.values(c.languages ?? {}).join(", ") || "—";
+  const languages = (c.languages ?? []).map((l) => l.name).join(", ") || "—";
   const subregion = c.subregion ? ` · ${c.subregion}` : "";
 
   countryCard.innerHTML = `
     <div class="country-head">
-      <img src="${esc(c.flags.svg)}" alt="${esc(c.flags.alt || `Flag of ${c.name.common}`)}" />
+      <img src="${esc(c.flag.url_svg)}" alt="Flag of ${esc(c.names.common)}" />
       <div>
-        <h2>${esc(c.name.common)}</h2>
+        <h2>${esc(c.names.common)}</h2>
         <div class="region">${esc(c.region)}${esc(subregion)}</div>
       </div>
     </div>
@@ -86,10 +92,16 @@ function renderCountry(c) {
       <div class="stat"><span class="label">Capital</span><span class="value">${esc(capital)}</span></div>
       <div class="stat"><span class="label">Population</span><span class="value">${esc(population)}</span></div>
       <div class="stat"><span class="label">Currency</span><span class="value">${esc(currencies)}</span></div>
-      <div class="stat"><span class="label">Code</span><span class="value">${esc(c.cca2)} · ${esc(c.cca3)}</span></div>
+      <div class="stat"><span class="label">Code</span><span class="value">${esc(c.codes.alpha_2)} · ${esc(c.codes.alpha_3)}</span></div>
       <div class="stat wide"><span class="label">Languages</span><span class="value">${esc(languages)}</span></div>
     </div>
   `;
+
+  return {
+    lat: capitalObj?.coordinates?.lat,
+    lng: capitalObj?.coordinates?.lng,
+    capitalName: capital
+  };
 }
 
 function renderWeather(w, capitalName) {
@@ -156,17 +168,14 @@ async function search(query) {
 
   try {
     const country = await fetchCountry(name);
-    renderCountry(country);
-    addRecent(country.name.common);
+    const { lat, lng, capitalName } = renderCountry(country);
+    addRecent(country.names.common);
     setStatus("");
 
-    // Prefer the capital's coordinates; fall back to the country centre
-    const [lat, lon] = country.capitalInfo?.latlng ?? country.latlng;
     weatherCard.innerHTML = `<div class="placeholder">Loading weather…</div>`;
-
     try {
-      const current = await fetchWeather(lat, lon);
-      renderWeather(current, country.capital?.[0] ?? country.name.common);
+      const current = await fetchWeather(lat, lng);
+      renderWeather(current, capitalName);
     } catch (weatherErr) {
       weatherCard.innerHTML = `<div class="placeholder">${esc(weatherErr.message)}</div>`;
     }
