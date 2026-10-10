@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>World Travel Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🌍</span>
+      <div>
+        <h1>World Travel Dashboard</h1>
+        <p class="subtitle">Country facts and live capital weather</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="search-panel">
+      <form id="search-form" autocomplete="off">
+        <input id="search-input" type="text" placeholder="Search a country, e.g. Japan" aria-label="Country name" />
+        <button type="submit">Explore</button>
+      </form>
+      <div id="chips" class="chips" aria-label="Suggested countries"></div>
+      <p id="status" class="status" role="status"></p>
+    </section>
+
+    <section class="grid">
+      <article id="country-card" class="card">
+        <div class="placeholder">Search for a country to see its details.</div>
+      </article>
+
+      <article id="weather-card" class="card">
+        <div class="placeholder">Current weather for the capital appears here.</div>
+      </article>
+    </section>
+
+    <section class="recent-panel">
+      <h2>Recently explored</h2>
+      <div id="recent" class="chips"></div>
+    </section>
+  </main>
+
+  <footer>
+    Data from <a href="https://restcountries.com" target="_blank" rel="noopener">REST Countries</a>
+    and <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>. No API keys required.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
