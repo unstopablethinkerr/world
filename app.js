@@ -1,33 +1,29 @@
 const PROXY_URL = "https://black-silence-e788.balasanthoshb.workers.dev";
-// Your Cloudflare Worker URL (keeps the REST Countries key private)
+/* ============ Settings ============ */
 
 // Open-Meteo needs no key, so the browser calls it directly
 const OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast";
 
-// Public country list for suggestions (no API calls while typing)
+// Country list for suggestions, tried in order
 const COUNTRIES_URLS = [
   "https://cdn.jsdelivr.net/gh/mledoze/countries@master/countries.json",
   "https://cdn.jsdelivr.net/gh/mledoze/countries@main/countries.json",
   "https://raw.githubusercontent.com/mledoze/countries/master/countries.json"
 ];
 
-const form = document.getElementById("search-form");
-const input = document.getElementById("search-input");
-const statusEl = document.getElementById("status");
-const countryCard = document.getElementById("country-card");
-const weatherCard = document.getElementById("weather-card");
-const chipsEl = document.getElementById("chips");
-const recentEl = document.getElementById("recent");
-const suggestionsEl = document.getElementById("suggestions");
+// Each check stays visible at least this long. Four checks at 2.5 s ≈ 10 s of loading
+const MIN_STEP_MS = 2500;
 
+// A check fails if the server doesn't answer within this time
+const REQUEST_TIMEOUT_MS = 8000;
+
+// Used if the visitor's country can't be detected
+const FALLBACK_COUNTRY = "Japan";
+
+const TOKYO = { lat: 35.6762, lng: 139.6503 };
 const SUGGESTIONS = ["Japan", "Brazil", "India", "Kenya", "Norway", "Australia"];
-const MAX_RECENT = 6;
 const MAX_SUGGESTIONS = 6;
-const recent = [];
-
-let allCountries = [];
-let currentMatches = [];
-let activeIndex = -1;
+const MAX_RECENT = 6;
 
 // WMO weather codes used by Open-Meteo
 const WEATHER_CODES = {
@@ -40,12 +36,38 @@ const WEATHER_CODES = {
   95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Severe thunderstorm"
 };
 
-// Show unexpected script errors on the page
-window.addEventListener("error", (event) => {
-  setStatus("Script error: " + event.message, true);
-});
+/* ============ Elements and state ============ */
 
-// Escape text before inserting it into HTML
+const $ = (id) => document.getElementById(id);
+
+const loaderEl = $("loader");
+const appEl = $("app");
+const checksEl = $("checks");
+const loaderMsg = $("loader-msg");
+const progressBar = $("progress-bar");
+const exploreBtn = $("explore-btn");
+const retryBtn = $("retry-btn");
+
+const form = $("search-form");
+const input = $("search-input");
+const statusEl = $("status");
+const countryCard = $("country-card");
+const weatherCard = $("weather-card");
+const chipsEl = $("chips");
+const recentEl = $("recent");
+const suggestionsEl = $("suggestions");
+
+const STEP_IDS = ["page", "worker", "countries", "weather"];
+const countryCache = new Map();
+const recent = [];
+
+let allCountries = [];
+let currentMatches = [];
+let activeIndex = -1;
+let visitorCode = null; // two-letter code, e.g. "IN", or null if unknown
+
+/* ============ Helpers ============ */
+
 function esc(value) {
   const div = document.createElement("div");
   div.textContent = value ?? "";
@@ -57,10 +79,168 @@ function setStatus(message, isError = false) {
   statusEl.classList.toggle("error", isError);
 }
 
-/* ---------- Data loading ---------- */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// fetch that gives up after REQUEST_TIMEOUT_MS
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Timed out. Check your connection.");
+    throw new Error("Network error. Check your connection.");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ============ Loading screen UI ============ */
+
+const MARK = {
+  pending: '<span class="dot"></span>',
+  running: '<span class="spinner"></span>',
+  ok: '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="tick" d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  fail: '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="cross" d="M7 7l10 10M17 7L7 17"/></svg>'
+};
+
+function setStep(id, state, detail = "") {
+  const li = checksEl.querySelector(`[data-step="${id}"]`);
+  li.dataset.state = state;
+  li.querySelector(".mark").innerHTML = MARK[state];
+  li.querySelector(".detail").textContent = detail;
+  updateProgress();
+}
+
+function updateProgress() {
+  const done = STEP_IDS.filter(
+    (id) => checksEl.querySelector(`[data-step="${id}"]`).dataset.state === "ok"
+  ).length;
+  progressBar.style.width = `${(done / STEP_IDS.length) * 100}%`;
+}
+
+// Runs one check, shows its state, and keeps it visible for MIN_STEP_MS
+async function runStep(id, task) {
+  setStep(id, "running");
+  const started = performance.now();
+  let passed = false;
+
+  try {
+    const detail = await task();
+    setStep(id, "ok", detail);
+    passed = true;
+  } catch (err) {
+    setStep(id, "fail", err.message);
+  }
+
+  const elapsed = performance.now() - started;
+  if (elapsed < MIN_STEP_MS) await sleep(MIN_STEP_MS - elapsed);
+  return passed;
+}
+
+/* ============ The four checks ============ */
+
+async function checkPage() {
+  const required = [form, input, statusEl, countryCard, weatherCard, chipsEl, recentEl, suggestionsEl];
+  if (required.some((el) => !el)) throw new Error("Page elements are missing.");
+  return "All page parts found";
+}
+
+async function checkWorker() {
+  if (PROXY_URL.includes("yourname")) throw new Error("Set PROXY_URL in app.js first.");
+
+  // Confirm the country API answers with real data
+  const res = await fetchWithTimeout(`${PROXY_URL}?q=japan`);
+  if (!res.ok) throw new Error(`Worker returned HTTP ${res.status}.`);
+
+  const json = await res.json();
+  const results = json.data?.objects ?? [];
+  if (results.length === 0) throw new Error("Worker answered but returned no data.");
+
+  const japan = results.find((c) => c.names?.common?.toLowerCase() === "japan") || results[0];
+  countryCache.set("japan", japan);
+
+  // Find out where the visitor is, so the dashboard can start with their country
+  visitorCode = await detectVisitorCountry();
+  return visitorCode
+    ? `Country API working · you're in ${visitorCode}`
+    : "Country API working · location not detected";
+}
+
+async function checkCountries() {
+  for (const url of COUNTRIES_URLS) {
+    try {
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) continue;
+      allCountries = parseCountries(await res.json());
+      if (allCountries.length === 0) continue;
+      return `${allCountries.length} countries ready`;
+    } catch (err) {
+      // try the next URL
+    }
+  }
+  throw new Error("Country list could not be downloaded.");
+}
+
+async function checkWeather() {
+  const current = await fetchWeather(TOKYO.lat, TOKYO.lng);
+  return `Tokyo is ${Math.round(current.temperature_2m)}°C right now`;
+}
+
+async function runAllChecks() {
+  exploreBtn.disabled = true;
+  exploreBtn.classList.remove("ready");
+  retryBtn.hidden = true;
+  loaderMsg.textContent = "Running checks…";
+  STEP_IDS.forEach((id) => setStep(id, "pending"));
+  progressBar.style.width = "0%";
+
+  const results = [
+    await runStep("page", checkPage),
+    await runStep("worker", checkWorker),
+    await runStep("countries", checkCountries),
+    await runStep("weather", checkWeather)
+  ];
+
+  if (results.every(Boolean)) {
+    loaderMsg.textContent = "All checks passed. You're good to go.";
+    exploreBtn.disabled = false;
+    exploreBtn.classList.add("ready");
+  } else {
+    loaderMsg.textContent = "Some checks failed. Check your connection, then retry.";
+    retryBtn.hidden = false;
+  }
+}
+
+/* ============ Visitor location ============ */
+
+// Asks the Worker for the visitor's country code. Returns null if unknown.
+async function detectVisitorCountry() {
+  try {
+    const res = await fetchWithTimeout(`${PROXY_URL}?where=1`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.country ?? null;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Picks the starting country name: the visitor's, or the fallback
+function startingCountry() {
+  if (visitorCode) {
+    const match = allCountries.find((c) => c.codes.alpha_2 === visitorCode);
+    if (match) return match.names.common;
+  }
+  return FALLBACK_COUNTRY;
+}
+
+/* ============ Data parsing and loading ============ */
 
 // Turns one raw record from countries.json into the shape the app uses.
-// Returns null if the record is missing the essentials, so it is skipped.
+// Returns null if the record is missing the essentials.
 function parseCountry(raw) {
   const name = raw?.name?.common;
   const code2 = raw?.cca2;
@@ -78,44 +258,29 @@ function parseCountry(raw) {
   };
 }
 
-// Parses the whole file: keeps valid records and sorts them by name
 function parseCountries(json) {
-  if (!Array.isArray(json)) throw new Error("Country file is not an array");
+  if (!Array.isArray(json)) throw new Error("Country file is not an array.");
   return json
     .map(parseCountry)
     .filter(Boolean)
     .sort((a, b) => a.names.common.localeCompare(b.names.common));
 }
 
-// Downloads the country list once, trying each URL in turn
-async function loadAllCountries() {
-  for (const url of COUNTRIES_URLS) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) continue;
-      allCountries = parseCountries(await res.json());
-      console.log("Loaded countries:", allCountries.length);
-      return;
-    } catch (err) {
-      console.warn("Could not load from", url, err);
-    }
-  }
-  setStatus("Suggestions unavailable: country list could not be loaded.", true);
-}
-
-// Detailed country data, via the Worker
+// Detailed country data, via the Worker. Cached so repeat visits are instant.
 async function fetchCountry(name) {
-  const res = await fetch(`${PROXY_URL}?q=${encodeURIComponent(name)}`);
+  const key = name.toLowerCase();
+  if (countryCache.has(key)) return countryCache.get(key);
+
+  const res = await fetchWithTimeout(`${PROXY_URL}?q=${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error("Country service unavailable.");
 
   const json = await res.json();
   const results = json.data?.objects ?? [];
-  if (results.length === 0) throw new Error(`No country found for "${name}".`);
+  const match = results.find((c) => c.names.common.toLowerCase() === key) || results[0];
+  if (!match) throw new Error(`No country found for "${name}".`);
 
-  return (
-    results.find((c) => c.names.common.toLowerCase() === name.toLowerCase()) ||
-    results[0]
-  );
+  countryCache.set(key, match);
+  return match;
 }
 
 async function fetchWeather(lat, lon) {
@@ -125,13 +290,13 @@ async function fetchWeather(lat, lon) {
     current: "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
     timezone: "auto"
   });
-  const res = await fetch(`${OPEN_METEO_URL}?${params}`);
+  const res = await fetchWithTimeout(`${OPEN_METEO_URL}?${params}`);
   if (!res.ok) throw new Error("Weather service unavailable.");
   const data = await res.json();
   return data.current;
 }
 
-/* ---------- Suggestions (local filtering, no API calls) ---------- */
+/* ============ Suggestions (local filtering, no API calls) ============ */
 
 function hideSuggestions() {
   suggestionsEl.hidden = true;
@@ -203,7 +368,7 @@ input.addEventListener("keydown", (e) => {
 
 input.addEventListener("blur", () => setTimeout(hideSuggestions, 150));
 
-/* ---------- Rendering ---------- */
+/* ============ Rendering ============ */
 
 function renderCountry(c) {
   const capitalObj = c.capitals?.find((x) => x.primary) ?? c.capitals?.[0];
@@ -233,8 +398,8 @@ function renderCountry(c) {
   `;
 
   return {
-    lat: capitalObj?.coordinates?.lat,
-    lng: capitalObj?.coordinates?.lng,
+    lat: capitalObj?.coordinates?.lat ?? c.latlng?.[0],
+    lng: capitalObj?.coordinates?.lng ?? c.latlng?.[1],
     capitalName: capital
   };
 }
@@ -288,7 +453,7 @@ function addRecent(name) {
   renderRecent();
 }
 
-/* ---------- Main flow ---------- */
+/* ============ Main flow ============ */
 
 async function search(query) {
   const name = query.trim();
@@ -324,11 +489,34 @@ form.addEventListener("submit", (e) => {
   search(input.value);
 });
 
-/* ---------- Startup ---------- */
+/* ============ Startup ============ */
+
+// Unexpected script errors show on the loading screen
+window.addEventListener("error", (event) => {
+  loaderMsg.textContent = "Script error: " + event.message;
+  loaderMsg.style.color = "var(--danger)";
+});
+
+exploreBtn.addEventListener("click", () => {
+  const start = startingCountry();
+  loaderMsg.textContent = visitorCode
+    ? `Starting with ${start}, based on your location.`
+    : `Starting with ${start}.`;
+
+  loaderEl.classList.add("leave");
+  setTimeout(() => {
+    loaderEl.hidden = true;
+    appEl.hidden = false;
+    appEl.classList.add("enter");
+    search(start);
+    input.focus();
+  }, 500);
+});
+
+retryBtn.addEventListener("click", runAllChecks);
 
 document.addEventListener("DOMContentLoaded", () => {
-  loadAllCountries();
   renderChips();
   renderRecent();
-  search("Japan");
+  runAllChecks();
 });
