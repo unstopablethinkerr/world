@@ -1,5 +1,11 @@
 const PROXY_URL = "https://black-silence-e788.balasanthoshb.workers.dev";
+// Your Cloudflare Worker URL (keeps the REST Countries key private)
+
+// Open-Meteo needs no key, so the browser calls it directly
 const OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast";
+
+// Public country list for suggestions (no API calls while typing)
+const COUNTRIES_CDN = "https://cdn.jsdelivr.net/gh/mledoze/countries@master/countries.json";
 
 const form = document.getElementById("search-form");
 const input = document.getElementById("search-input");
@@ -8,10 +14,16 @@ const countryCard = document.getElementById("country-card");
 const weatherCard = document.getElementById("weather-card");
 const chipsEl = document.getElementById("chips");
 const recentEl = document.getElementById("recent");
+const suggestionsEl = document.getElementById("suggestions");
 
 const SUGGESTIONS = ["Japan", "Brazil", "India", "Kenya", "Norway", "Australia"];
 const MAX_RECENT = 6;
+const MAX_SUGGESTIONS = 6;
 const recent = [];
+
+let allCountries = [];
+let currentMatches = [];
+let activeIndex = -1;
 
 // WMO weather codes used by Open-Meteo
 const WEATHER_CODES = {
@@ -24,10 +36,9 @@ const WEATHER_CODES = {
   95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Severe thunderstorm"
 };
 
-// Show any unexpected script error on the page
+// Show unexpected script errors on the page
 window.addEventListener("error", (event) => {
-  statusEl.textContent = "Script error: " + event.message;
-  statusEl.classList.add("error");
+  setStatus("Script error: " + event.message, true);
 });
 
 // Escape text before inserting it into HTML
@@ -42,7 +53,27 @@ function setStatus(message, isError = false) {
   statusEl.classList.toggle("error", isError);
 }
 
-// Calls the Cloudflare Worker, which adds the API key on the server
+/* ---------- Data loading ---------- */
+
+// One download at startup, normalised to the fields the UI uses
+async function loadAllCountries() {
+  try {
+    const res = await fetch(COUNTRIES_CDN);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    allCountries = data.map((c) => ({
+      names: { common: c.name.common },
+      flag: { url_svg: c.flags.svg },
+      capitals: (c.capital ?? []).map((name) => ({ name })),
+      codes: { alpha_2: c.cca2, alpha_3: c.cca3 }
+    }));
+  } catch (err) {
+    // Suggestions stay empty if the CDN is unreachable
+  }
+}
+
+// Detailed country data, via the Worker
 async function fetchCountry(name) {
   const res = await fetch(`${PROXY_URL}?q=${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error("Country service unavailable.");
@@ -69,6 +100,80 @@ async function fetchWeather(lat, lon) {
   const data = await res.json();
   return data.current;
 }
+
+/* ---------- Suggestions (local filtering, no API calls) ---------- */
+
+function hideSuggestions() {
+  suggestionsEl.hidden = true;
+  suggestionsEl.innerHTML = "";
+  currentMatches = [];
+  activeIndex = -1;
+}
+
+function renderSuggestions(list) {
+  suggestionsEl.innerHTML = "";
+  activeIndex = -1;
+  if (list.length === 0) return hideSuggestions();
+
+  list.forEach((c) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<img class="flag" src="${esc(c.flag.url_svg)}" alt="" /><span>${esc(c.names.common)}</span>`;
+    // mousedown keeps focus in the input long enough for the click to register
+    li.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pick(c.names.common);
+    });
+    suggestionsEl.appendChild(li);
+  });
+  suggestionsEl.hidden = false;
+}
+
+function loadSuggestions(q) {
+  const needle = q.toLowerCase();
+  currentMatches = allCountries
+    .filter((c) => c.names.common.toLowerCase().startsWith(needle))
+    .slice(0, MAX_SUGGESTIONS);
+  renderSuggestions(currentMatches);
+}
+
+function pick(name) {
+  hideSuggestions();
+  search(name);
+}
+
+input.addEventListener("input", () => {
+  const q = input.value.trim();
+  if (q.length < 2) return hideSuggestions();
+  loadSuggestions(q);
+});
+
+input.addEventListener("keydown", (e) => {
+  const items = suggestionsEl.querySelectorAll("li");
+  if (suggestionsEl.hidden || items.length === 0) return;
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    activeIndex = (activeIndex + 1) % items.length;
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    activeIndex = (activeIndex - 1 + items.length) % items.length;
+  } else if (e.key === "Enter" && activeIndex >= 0) {
+    e.preventDefault();
+    pick(currentMatches[activeIndex].names.common);
+    return;
+  } else if (e.key === "Escape") {
+    hideSuggestions();
+    return;
+  } else {
+    return;
+  }
+
+  items.forEach((li, i) => li.classList.toggle("active", i === activeIndex));
+});
+
+input.addEventListener("blur", () => setTimeout(hideSuggestions, 150));
+
+/* ---------- Rendering ---------- */
 
 function renderCountry(c) {
   const capitalObj = c.capitals?.find((x) => x.primary) ?? c.capitals?.[0];
@@ -122,16 +227,18 @@ function renderWeather(w, capitalName) {
   `;
 }
 
+function makeChip(name) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "chip";
+  btn.textContent = name;
+  btn.addEventListener("click", () => search(name));
+  return btn;
+}
+
 function renderChips() {
   chipsEl.innerHTML = "";
-  SUGGESTIONS.forEach((name) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chip";
-    btn.textContent = name;
-    btn.addEventListener("click", () => search(name));
-    chipsEl.appendChild(btn);
-  });
+  SUGGESTIONS.forEach((name) => chipsEl.appendChild(makeChip(name)));
 }
 
 function renderRecent() {
@@ -140,14 +247,7 @@ function renderRecent() {
     recentEl.innerHTML = `<span class="status">Nothing yet.</span>`;
     return;
   }
-  recent.forEach((name) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chip";
-    btn.textContent = name;
-    btn.addEventListener("click", () => search(name));
-    recentEl.appendChild(btn);
-  });
+  recent.forEach((name) => recentEl.appendChild(makeChip(name)));
 }
 
 function addRecent(name) {
@@ -158,10 +258,13 @@ function addRecent(name) {
   renderRecent();
 }
 
+/* ---------- Main flow ---------- */
+
 async function search(query) {
   const name = query.trim();
   if (!name) return;
 
+  hideSuggestions();
   input.value = name;
   setStatus("Loading country details…");
   weatherCard.innerHTML = `<div class="placeholder">Waiting for country data…</div>`;
@@ -191,7 +294,10 @@ form.addEventListener("submit", (e) => {
   search(input.value);
 });
 
+/* ---------- Startup ---------- */
+
 document.addEventListener("DOMContentLoaded", () => {
+  loadAllCountries();
   renderChips();
   renderRecent();
   search("Japan");
