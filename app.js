@@ -5,7 +5,11 @@ const PROXY_URL = "https://black-silence-e788.balasanthoshb.workers.dev";
 const OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast";
 
 // Public country list for suggestions (no API calls while typing)
-const COUNTRIES_CDN = "https://cdn.jsdelivr.net/gh/mledoze/countries@master/countries.json";
+const COUNTRIES_URLS = [
+  "https://cdn.jsdelivr.net/gh/mledoze/countries@master/countries.json",
+  "https://cdn.jsdelivr.net/gh/mledoze/countries@main/countries.json",
+  "https://raw.githubusercontent.com/mledoze/countries/master/countries.json"
+];
 
 const form = document.getElementById("search-form");
 const input = document.getElementById("search-input");
@@ -55,22 +59,48 @@ function setStatus(message, isError = false) {
 
 /* ---------- Data loading ---------- */
 
-// One download at startup, normalised to the fields the UI uses
-async function loadAllCountries() {
-  try {
-    const res = await fetch(COUNTRIES_CDN);
-    if (!res.ok) return;
-    const data = await res.json();
+// Turns one raw record from countries.json into the shape the app uses.
+// Returns null if the record is missing the essentials, so it is skipped.
+function parseCountry(raw) {
+  const name = raw?.name?.common;
+  const code2 = raw?.cca2;
+  if (!name || !code2) return null;
 
-    allCountries = data.map((c) => ({
-      names: { common: c.name.common },
-      flag: { url_svg: c.flags.svg },
-      capitals: (c.capital ?? []).map((name) => ({ name })),
-      codes: { alpha_2: c.cca2, alpha_3: c.cca3 }
-    }));
-  } catch (err) {
-    // Suggestions stay empty if the CDN is unreachable
+  return {
+    names: { common: name },
+    flag: {
+      url_svg: raw.flags?.svg ?? `https://flagcdn.com/w40/${code2.toLowerCase()}.png`,
+      emoji: raw.flag ?? ""
+    },
+    capitals: (raw.capital ?? []).map((n) => ({ name: n })),
+    codes: { alpha_2: code2, alpha_3: raw.cca3 ?? "" },
+    latlng: Array.isArray(raw.latlng) ? raw.latlng : null
+  };
+}
+
+// Parses the whole file: keeps valid records and sorts them by name
+function parseCountries(json) {
+  if (!Array.isArray(json)) throw new Error("Country file is not an array");
+  return json
+    .map(parseCountry)
+    .filter(Boolean)
+    .sort((a, b) => a.names.common.localeCompare(b.names.common));
+}
+
+// Downloads the country list once, trying each URL in turn
+async function loadAllCountries() {
+  for (const url of COUNTRIES_URLS) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      allCountries = parseCountries(await res.json());
+      console.log("Loaded countries:", allCountries.length);
+      return;
+    } catch (err) {
+      console.warn("Could not load from", url, err);
+    }
   }
+  setStatus("Suggestions unavailable: country list could not be loaded.", true);
 }
 
 // Detailed country data, via the Worker
