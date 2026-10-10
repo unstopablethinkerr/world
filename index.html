@@ -7,49 +7,99 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">🌍</span>
-      <div>
-        <h1>World Travel Dashboard</h1>
-        <p class="subtitle">Country facts and live capital weather</p>
-      </div>
+
+  <!-- ===== Loading screen: runs the checks ===== -->
+  <div id="loader" class="loader" role="status" aria-live="polite">
+    <div class="loader-card">
+      <div class="loader-logo">🌍</div>
+      <h1>World Travel Dashboard</h1>
+      <p class="subtitle">Checking everything before we start</p>
+
+      <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+
+      <ul id="checks" class="checks">
+        <li data-step="page" data-state="pending">
+          <span class="mark"></span>
+          <div>
+            <span class="label-text">Page loaded</span>
+            <span class="detail"></span>
+          </div>
+        </li>
+        <li data-step="worker" data-state="pending">
+          <span class="mark"></span>
+          <div>
+            <span class="label-text">Country API responded (Worker)</span>
+            <span class="detail"></span>
+          </div>
+        </li>
+        <li data-step="countries" data-state="pending">
+          <span class="mark"></span>
+          <div>
+            <span class="label-text">Country list downloaded</span>
+            <span class="detail"></span>
+          </div>
+        </li>
+        <li data-step="weather" data-state="pending">
+          <span class="mark"></span>
+          <div>
+            <span class="label-text">Weather service reachable</span>
+            <span class="detail"></span>
+          </div>
+        </li>
+      </ul>
+
+      <p id="loader-msg" class="loader-msg">Starting checks…</p>
+      <button id="explore-btn" class="explore-btn" type="button" disabled>Explore now</button>
+      <button id="retry-btn" class="retry-btn" type="button" hidden>Retry checks</button>
     </div>
-  </header>
+  </div>
 
-  <main>
-    <section class="search-panel">
-      <form id="search-form" autocomplete="off">
-        <div class="search-wrap">
-          <input id="search-input" type="text" placeholder="Search a country, e.g. Japan" aria-label="Country name" />
-          <ul id="suggestions" class="suggestions" hidden></ul>
+  <!-- ===== The real dashboard: hidden until Explore ===== -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🌍</span>
+        <div>
+          <h1>World Travel Dashboard</h1>
+          <p class="subtitle">Country facts and live capital weather</p>
         </div>
-        <button type="submit">Explore</button>
-      </form>
-      <div id="chips" class="chips" aria-label="Suggested countries"></div>
-      <p id="status" class="status" role="status"></p>
-    </section>
+      </div>
+    </header>
 
-    <section class="grid">
-      <article id="country-card" class="card">
-        <div class="placeholder">Search for a country to see its details.</div>
-      </article>
-      <article id="weather-card" class="card">
-        <div class="placeholder">Current weather for the capital appears here.</div>
-      </article>
-    </section>
+    <main>
+      <section class="search-panel">
+        <form id="search-form" autocomplete="off">
+          <div class="search-wrap">
+            <input id="search-input" type="text" placeholder="Search a country, e.g. Japan" aria-label="Country name" />
+            <ul id="suggestions" class="suggestions" hidden></ul>
+          </div>
+          <button type="submit">Explore</button>
+        </form>
+        <div id="chips" class="chips" aria-label="Suggested countries"></div>
+        <p id="status" class="status" role="status"></p>
+      </section>
 
-    <section class="recent-panel">
-      <h2>Recently explored</h2>
-      <div id="recent" class="chips"></div>
-    </section>
-  </main>
+      <section class="grid">
+        <article id="country-card" class="card">
+          <div class="placeholder">Search for a country to see its details.</div>
+        </article>
+        <article id="weather-card" class="card">
+          <div class="placeholder">Current weather for the capital appears here.</div>
+        </article>
+      </section>
 
-  <footer>
-    Data from <a href="https://restcountries.com" target="_blank" rel="noopener">REST Countries</a>,
-    <a href="https://github.com/mledoze/countries" target="_blank" rel="noopener">mledoze/countries</a>,
-    and <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>.
-  </footer>
+      <section class="recent-panel">
+        <h2>Recently explored</h2>
+        <div id="recent" class="chips"></div>
+      </section>
+    </main>
+
+    <footer>
+      Data from <a href="https://restcountries.com" target="_blank" rel="noopener">REST Countries</a>,
+      <a href="https://github.com/mledoze/countries" target="_blank" rel="noopener">mledoze/countries</a>,
+      and <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>.
+    </footer>
+  </div>
 
   <script src="app.js"></script>
 </body>
